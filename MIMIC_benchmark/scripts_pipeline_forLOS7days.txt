@@ -1,0 +1,101 @@
+(Apartir de updates de los (>3 days))
+
+Dentro de carpeta MIMIC_benchmark
+
+python3 -m mimic3benchmark.scripts.extract_subjects {PATH TO MIMIC-III CSVs} data/root/
+
+python3 -m mimic3benchmark.scripts.validate_events data/root/
+
+python3 -m mimic3benchmark.scripts.extract_episodes_from_subjects data/root/
+
+python3 -m mimic3benchmark.scripts.split_train_and_test data/root/
+
+(python -m mimic3benchmark.scripts.create_length_of_stay data/root/ data/{task}/)
+python3 -m mimic3benchmark.scripts.create_losxdays data/root/ data/los7days/ 7
+
+
+
+En verdad este paso no hace falta para los7days, ya que los7days solo diferencia de los en labels:
+python3 -m mimic3models.create_normalizer_state --impute_strategy previous --n_samples -1 --output_dir . --start_time zero --store_masks --task los --timestep 1.0 --data /home/usuario/TFG/code/MIMIC_benchmark-modifiedForLOSAbril/MIMIC_benchmark/data/los7days
+
+
+(Despues cambiar el nombre de este archivo: los_ts:1.00_impute:previous_start:zero_masks:True_n:29846.normalizer
+a los_ts1.0.input_str:previous.start_time:zero.normalizer
+para poder usar en Models training script pipeline )
+
+
+
+(python -m mimic3models.split_train_val {dataset-directory})
+python3 -m mimic3models.split_train_val data/los7days/
+
+
+Crear una nueva carpeta en mimic3models llamada los7days
+
+Benchmark Models training script pipeline
+(Si lleva !python es en colab)
+
+Standard LSTM
+
+Training:
+python3 -um mimic3models.los7days.main --data /home/usuario/TFG/code/MIMIC_benchmark-modifiedForLOSAbril/MIMIC_benchmark/data/los7days --network mimic3models/keras_models/lstm.py --dim 16 --timestep 1.0 --depth 2 --dropout 0.3 --epochs 50 --mode train --batch_size 8 --output_dir mimic3models/los7days
+
+!python -um mimic3models.los7days.main --network mimic3models/keras_models/lstm.py --data /content/los7days/ --dim 16 --epochs 50 --timestep 1.0 --depth 2 --dropout 0.3 --mode train --batch_size 8 --output_dir mimic3models/los7days --verbose 1
+
+(update mimic3models/los7days/main.py )
+
+
+
+Predecir en test:
+!python3 -um mimic3models.los7days.main --network mimic3models/keras_models/lstm.py --data /content/los7days/ --dim 16 --timestep 1.0 --depth 2 --dropout 0.3 --batch_size 8 --epochs 50 --load_state mimic3models/los7days/keras_states/k_lstm.n16.d0.3.dep2.bs8.ts1.0.epoch24.test0.30572518154344425.state --output_dir mimic3models/los7days --mode test
+
+
+Evaluation:
+
+https://github.com/YerevaNN/mimic3-benchmarks/blob/master/mimic3models/pretrained_models.md
+https://github.com/YerevaNN/mimic3-benchmarks/tree/master/mimic3benchmark/evaluation
+
+!python3 -m mimic3benchmark.evaluation.evaluate_los_customized /content/gdrive/MyDrive/MIMIC_benchmark/mimic3models/los7days/test_predictions/k_lstm.n16.d0.3.dep2.bs8.ts1.0.epoch31.test0.44792536161478286.state.csv --test_listfile /content/los7days/test/listfile.csv --save_file los7days_results_lstm.json
+
+
+
+
+Channel-wise LSTM
+
+
+Training:
+!python -um mimic3models.los7days.main --data /content/los7days/ --network mimic3models/keras_models/channel_wise_lstms.py --dim 8 --depth 1 --batch_size 8 --dropout 0.3 --timestep 1.0 --epochs 4 --mode train --size_coef 4.0 --output_dir mimic3models/los7days
+
+
+
+(Si no termina los epochs para seguir, load_state del epoch que dejaste:
+!python -um mimic3models.los7days.main --data /content/los7days/ --network mimic3models/keras_models/channel_wise_lstms.py --dim 8 --depth 1 --batch_size 8 --dropout 0.3 --timestep 1.0 --epochs 5 --load_state mimic3models/los7days/keras_states/k_channel_wise_lstms.xxxx.state --mode train --size_coef 4.0 --output_dir mimic3models/los7days
+)
+
+
+Predecir en test: 
+
+!python -um mimic3models.los7days.main --data /content/los7days/ --network mimic3models/keras_models/channel_wise_lstms.py --dim 8 --depth 1 --batch_size 8 --dropout 0.3 --timestep 1.0 --epochs 5 --load_state mimic3models/los7days/keras_states/k_channel_wise_lstms.xxxx.state --mode test --size_coef 4.0 --output_dir mimic3models/los7days
+
+
+Evaluation:
+
+!python -m mimic3benchmark.evaluation.evaluate_ihm /content/gdrive/MyDrive/MIMIC_benchmark/mimic3models/los7days/test_predictions/k_channel_wise_lstms.xxxx.state.csv --test_listfile /content/los7days/test/listfile.csv --save_file los7days_results_channelWise_lstm.json
+
+(El los_result.json esta en el directorio donde abres el terminal, i.e. en carpeta mimic_benchmark_master o MIMIC_benchmark )
+
+
+Logistic 
+
+!python -um mimic3models.los7days.logistic.main --data /content/los7days --l2 --C 0.001 --output_dir mimic3models/los7days/logistic
+(update mimic3models/los7days/logistic/main.py)
+
+Evaluation:
+
+!python -m mimic3benchmark.evaluation.evaluate_los_customized /content/gdrive/MyDrive/MIMIC_benchmark/mimic3models/los7days/logistic/predictions/all.all.l2.C0.001.csv --test_listfile /content/los7days/test/listfile.csv --save_file los7days_results_logistic.json
+
+
+
+
+
+
+

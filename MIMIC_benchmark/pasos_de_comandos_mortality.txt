@@ -1,0 +1,188 @@
+Script: pasos (comandos de ejecución en orden) para ejecutar los archivos .py del Benchmark de Harutyunyan et al. (https://github.com/YerevaNN/mimic3-benchmarks).
+Nota: Si lleva !python, significa que es ejecutado en Google Colab.
+
+
+
+1. Abrir terminal cmd dentro de carpeta MIMIC_benchmark y ejecuta:
+
+	python3 -m mimic3benchmark.scripts.extract_subjects {PATH TO MIMIC-III CSVs} data/root/
+
+Este paso genera un directorio por SUBJECT_ID (i.e. por paciente) y escribe información de cada estancia de ICU del paciente en archivos CSV. 
+
+2. Luego ejecuta :
+
+	python3 -m mimic3benchmark.scripts.validate_events data/root/
+
+Este paso hace la primera validación de los datos, por ejemplo, eliminar los eventos a los que les falta información. 
+
+3. Este paso divide los datos por paciente en episodios separados (es decir, estadías en UCI), luego extrae los datos de las variables interesadas y las guardar en forma de series temporales:
+
+	python3 -m mimic3benchmark.scripts.extract_episodes_from_subjects data/root/
+ 
+
+Este paso requiere dos archivos, uno que asigna los ITEMID del evento a las variables clínicas y otro que define los rangos válidos para las variables clínicas (para detectar valores atípicos, etc.). 
+
+
+4. Divide todo el conjunto de datos en conjuntos de entrenamiento y prueba: 
+	python3 -m mimic3benchmark.scripts.split_train_and_test data/root/
+
+
+5. Genera conjuntos de datos específicos de la tarea (predecir mortalidad como clasificación binaria), listos para usar en modelos predictivos. Por ejemplo, limitar la ventana de tiempo de los datos o asignar labels.  
+
+	python3 -m mimic3benchmark.scripts.create_in_hospital_mortality data/root/ data/{task name}/
+
+Un ejemplo: 
+	python3 -m mimic3benchmark.scripts.create_in_hospital_mortality data/root/ data/in-hospital-mortality/ 
+
+
+(OBS!! Paso extra: para mantener una misma cohorte a la hora de entrenar los modelos que usan 17 variables del benchmark y los que usan OASIS, ejecute el siguiente comando para generar Listfiles. En el Listfile enumera todas las muestras (estancias en UCI) en la cohorte que queremos mantener. Lo necesitamos a la hora de entrenar los modelos que usan OASIS.
+
+	python3 -m mimic3benchmark.scripts.create_in_hospital_mortality_icustayidListFile data/root/ data/in-hospital-mortality/icustaysListfile
+)
+
+
+
+6. Para definir la estrategia de normalización, que la utilizaremos para normalizar y imputar missing values de los datos antes de entrenarlos con modelos, creamos un archivo normalizer ejecutando el siguiente comando: 
+
+	python3 -m mimic3models.create_normalizer_state --impute_strategy previous --n_samples -1 --output_dir . --start_time zero --store_masks --task ihm --timestep 1.0 --data /home/usuario/TFG/code/MIMIC_benchmark-modifiedForLOSAbril/MIMIC_benchmark/data/in-hospital-mortality
+	
+	// Novo
+	python3 -m mimic3models.create_normalizer_state --impute_strategy previous --n_samples -1 --output_dir . --start_time zero --store_masks --task ihm --timestep 1.0 --data /data/codi/MIMIC_benchmark-20210516/MIMIC_benchmark/data/in-hospital-mortality
+
+
+(OBS. Si usa Linux, cambie el nombre de este archivo: los_ts:1.00_impute:previous_start:zero_masks:True_n:29846.normalizer
+a los_ts1.0.input_str:previous.start_time:zero.normalizer 
+para poder usar en Models training script pipeline )
+
+// ihm_ts:1.00_impute:previous_start:zero_masks:True_n:17903
+
+
+7. Extrae el conjunto de validación del conjunto de entrenamiento:
+
+	python -m mimic3models.split_train_val {dataset-directory}
+
+Un ejemplo: python3 -m mimic3models.split_train_val data/in-hospital-mortalit/
+
+    python3 -um mimic3models.in_hospital_mortality.logistic.main --data data/in-hospital-mortality --l2 --C 0.001 --output_dir mimic3models/in_hospital_mortality/logistic
+
+
+Hasta aquí hemos preparado los conjuntos de datos listos para entrenar. Los siguientes comandos serán sobre cómo entrenar modelos predictivos con Train/Validation set y cómo evaluar los modelos con Test set. 
+
+
+
+
+Modelo Logistic Regression  (Obs. updated ../logistic/main.py (changed Imputer to SimpleImputer))
+
+
+Training:
+
+	!python -um mimic3models.in_hospital_mortality.logistic.main --data {PATH TO mortality training dataset} --l2 --C 0.001 --output_dir {PATH WHERE TO STORE THE RESULTS}
+
+Un ejemplo:
+
+	!python -um mimic3models.in_hospital_mortality.logistic.main --data /content/mortality --l2 --C 0.001 --output_dir mimic3models/in_hospital_mortality/logistic
+	
+	// python3 -um mimic3models.los3days.logistic.main --data data/in-hospital-mortality --l2 --C 0.001 --output_dir mimic3models/in_hospital_mortality/logistic
+
+
+Evaluation (evaluar las predicciones hechas para Test set con diversas métricas, por ejemplo: accuracy, aucroc y aucpr):
+	!python -m mimic3benchmark.evaluation.evaluate_ihm {PATH OF CSV WHERE STORED TEST SET PREDICTIONS RESULTS} --test_listfile {PATH OF TEST LISTFILE} --save_file {NAME OF THE JSON FILE WHERE SAVES THE EVALUATION RESULTS}
+
+
+Un ejemplo:
+	!python -m mimic3benchmark.evaluation.evaluate_ihm /content/gdrive/MyDrive/MIMIC_benchmark/mimic3models/in_hospital_mortality/logistic/predictions/all.all.l2.C0.001.csv --test_listfile /content/in_hospital_mortality/test/listfile.csv --save_file ihm_results_evaluation_logistic.json
+
+
+
+
+Standard LSTM
+
+Training:
+
+	!python -um mimic3models.in_hospital_mortality.main --network {PATH TO MODEL DEFINITION SCRIPT} --data {PATH TO mortality task's training dataset} --dim 16 --epochs 35 --timestep 1.0 --depth 2 --dropout 0.3 --mode train --batch_size 8 --output_dir {PATH WHERE TO STORE THE RESULTS AND TRAINED MODELS} --verbose 1
+
+Un ejemplo:
+	!python -um mimic3models.in_hospital_mortality.main --network mimic3models/keras_models/lstm.py --data /content/mortality/ --dim 16 --epochs 35 --timestep 1.0 --depth 2 --dropout 0.3 --mode train --batch_size 8 --output_dir mimic3models/in_hospital_mortality --verbose 1
+	
+	// python3 -um mimic3models.in_hospital_mortality.main --network mimic3models/keras_models/lstm.py --datadata data/in-hospital-mortality --dim 16 --epochs 35 --timestep 1.0 --depth 2 --dropout 0.3 --mode train --batch_size 8 --output_dir mimic3models/in_hospital_mortality --verbose 1
+
+
+(Para cargar un modelo entrenado guardado y seguir entrenando sobre ese modelo, ejecute:
+
+	!python -um mimic3models.in_hospital_mortality.main --data {PATH TO mortality task's training dataset} --network {PATH TO MODEL DEFINITION SCRIPT} --dim 8 --depth 1 --batch_size 8 --dropout 0.3 --timestep 1.0 --epochs 5 --load_state {PATH TO SAVED TRAINED MODEL } --mode train --output_dir {PATH WHERE TO STORE THE RESULTS AND TRAINED MODELS}
+
+Un ejemplo:
+
+	!python -um mimic3models.in_hospital_mortality.main --data /content/inHospitalMortality/ --network mimic3models/keras_models/lstm.py --dim 8 --depth 1 --batch_size 8 --dropout 0.3 --timestep 1.0 --epochs 5 --load_state mimic3models/in_hospital_mortality/keras_states/k_lstm.n16.d0.3.dep2.bs8.ts1.0.epoch33.test0.28255336389898295.state --mode train --output_dir mimic3models/in_hospital_mortality
+)
+
+
+Predecir en test:
+
+	!python3 -um mimic3models.in_hospital_mortality.main --network {PATH TO MODEL DEFINITION SCRIPT} --data {PATH TO mortality task's training dataset} --dim 16 --timestep 1.0 --depth 2 --dropout 0.3 --batch_size 8 --load_state {PATH TO SAVED TRAINED MODEL} --output_dir {PATH WHERE TO STORE THE PREDICTION RESULTS} --mode test
+
+Un ejemplo:
+
+	!python -um mimic3models.in_hospital_mortality.main --network mimic3models/keras_models/lstm.py --data /content/mortality/ --dim 16 --timestep 1.0 --depth 2 --dropout 0.3 --batch_size 8 --load_state mimic3models/in_hospital_mortality/keras_states/k_lstm.n16.d0.3.dep2.bs8.ts1.0.epoch33.test0.28255336389898295.state --output_dir mimic3models/in_hospital_mortality --mode test
+
+
+Evaluation (evaluar las predicciones hechas para Test set con diversas métricas, por ejemplo: accuracy, aucroc y aucpr)::
+
+	!python3 -m mimic3benchmark.evaluation.evaluate_ihm {PATH OF CSV WHERE STORED TEST SET PREDICTIONS RESULTS}  --test_listfile {PATH OF TEST LISTFILE} --save_file {NAME OF THE JSON FILE WHERE SAVES THE EVALUATION RESULTS}
+
+Un ejemplo:
+!python -m mimic3benchmark.evaluation.evaluate_ihm /content/gdrive/MyDrive/MIMIC_benchmark/mimic3models/in_hospital_mortality/test_predictions/k_lstm.n16.d0.3.dep2.bs8.ts1.0.epoch33.test0.28255336389898295.state.csv --test_listfile /content/mortality/test/listfile.csv --save_file ihm_results_lstm_epoch33.json
+
+
+Los siguientes modelos tienen comandos con la misma estructura que Standard LSTM, así que solo pongo ejemplos.
+
+
+Channel-wise LSTM
+
+Training:
+	!python -um mimic3models.in_hospital_mortality.main --data /content/inHospitalMortality/ --network mimic3models/keras_models/channel_wise_lstms.py --dim 8 --depth 1 --batch_size 8 --dropout 0.3 --timestep 1.0 --epochs 55 --mode train --output_dir mimic3models/in_hospital_mortality
+
+(Load:
+	!python -um mimic3models.in_hospital_mortality.main --data /content/mortality/ --network mimic3models/keras_models/channel_wise_lstms.py --dim 8 --depth 1 --batch_size 8 --dropout 0.3 --timestep 1.0 --epochs 5 --load_state mimic3models/in_hospital_mortality/keras_states/k_channel_wise_lstms.n8.szc4.0.d0.3.dep1.bs8.ts1.0.epoch9.test0.2846316648826401.state --mode train --output_dir mimic3models/in_hospital_mortality
+)
+
+
+Predecir en test: 
+
+	!python -um mimic3models.in_hospital_mortality.main --data /content/mortality/ --network mimic3models/keras_models/channel_wise_lstms.py --dim 8 --depth 1 --batch_size 8 --dropout 0.3 --timestep 1.0 --epochs 5 --load_state mimic3models/in_hospital_mortality/keras_states/k_channel_wise_lstms.n8.szc4.0.d0.3.dep1.bs8.ts1.0.epoch34.test0.27684868672373575.state --mode test --output_dir mimic3models/in_hospital_mortality
+
+Evaluation:
+
+	!python -m mimic3benchmark.evaluation.evaluate_ihm /content/gdrive/MyDrive/MIMIC_benchmark/mimic3models/in_hospital_mortality/test_predictions/k_channel_wise_lstms.n8.szc4.0.d0.3.dep1.bs8.ts1.0.epoch34.test0.27684868672373575.state.csv --save_file ihm_results_channelWise_epoch34.json
+
+
+
+
+
+
+
+Channel-wise GRU
+
+
+Training:
+
+	!python -um mimic3models.in_hospital_mortality.main --data /content/inHospitalMortality/ --network mimic3models/keras_models/channel_wise_grus.py --dim 8 --depth 1 --batch_size 8 --dropout 0.3 --timestep 1.0 --epochs 5 --mode train --output_dir mimic3models/in_hospital_mortality
+
+
+(Load:
+	!python -um mimic3models.in_hospital_mortality.main --data /content/inHospitalMortality/ --network mimic3models/keras_models/channel_wise_grus.py --dim 8 --depth 1 --batch_size 8 --dropout 0.3 --timestep 1.0 --epochs 5 --load_state mimic3models/in_hospital_mortality/keras_states/k_channel_wise_grus.n8.szc4.0.d0.3.dep1.bs8.ts1.0.epoch10.test0.2866723704955949.state --mode train --output_dir mimic3models/in_hospital_mortality
+)
+
+
+Predecir en test: 
+	!python -um mimic3models.in_hospital_mortality.main --data /content/inHospitalMortality/ --network mimic3models/keras_models/channel_wise_grus.py --dim 8 --depth 1 --batch_size 8 --dropout 0.3 --timestep 1.0 --load_state mimic3models/in_hospital_mortality/keras_states/k_channel_wise_grus.n8.szc4.0.d0.3.dep1.bs8.ts1.0.epoch20.test0.2798298893740353.state --mode test --output_dir mimic3models/in_hospital_mortality
+
+
+Evaluation:
+	!python -m mimic3benchmark.evaluation.evaluate_ihm /content/gdrive/MyDrive/MIMIC_benchmark/mimic3models/in_hospital_mortality/test_predictions/k_channel_wise_grus.n8.szc4.0.d0.3.dep1.bs8.ts1.0.epoch20.test0.2798298893740353.state.csv --save_file ihm_results_channelWise_gru_epoch20.json
+
+
+
+
+
+
